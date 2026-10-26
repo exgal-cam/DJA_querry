@@ -44,6 +44,13 @@ import argparse
 import sys
 from pathlib import Path
 
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+from astropy.stats import sigma_clip
+import sep
+import matplotlib as mpl
+from astropy.io import fits
 import numpy as np
 import pandas as pd
 import requests
@@ -356,6 +363,132 @@ def main():
         )
         for p in paths:
             print(f"  saved {p}")
+
+
+def fits_to_rgb(fits_red, fits_green, fits_blue,r_hdu = 'SCI', g_hdu = 'SCI', b_hdu = 'SCI', perc_max=98, perc_min=0, savepath=''):
+
+    perc_max = np.atleast_1d(perc_max)
+    perc_min = np.atleast_1d(perc_min)
+    if len(perc_max)==1: perc_max = np.full(3, perc_max[0])
+    if len(perc_min)==1: perc_min = np.full(3, perc_min[0])
+
+    with fits.open(fits_red, ignore_missing_simple=True) as hdul:
+        dr = hdul[r_hdu].data.astype(np.float32)
+    with fits.open(fits_green, ignore_missing_simple=True) as hdul:
+        dg = hdul[g_hdu].data.astype(np.float32)
+    with fits.open(fits_blue, ignore_missing_simple=True) as hdul:
+        db = hdul[b_hdu].data.astype(np.float32)
+
+    rfac = 1.  #rescale?
+    dr *= rfac
+
+    r_bkg = sep.Background(dr)#.byteswap().newbyteorder())
+    #r_bkg = r_bkg.astype(np.float32)
+    g_bkg = sep.Background(dg)#.byteswap().newbyteorder())
+    #g_bkg = g_bkg.astype(np.float32)
+    b_bkg = sep.Background(db)#.byteswap().newbyteorder())
+    #b_bkg = b_bkg.astype(np.float32)
+
+    drs = dr-r_bkg
+    dgs = dg-g_bkg
+    dbs = db-b_bkg
+
+    drs = drs.astype(np.float32)
+    dgs = dgs.astype(np.float32)
+    dbs = dbs.astype(np.float32)
+
+    dr_max = np.nanmax(drs)
+    dg_max = np.nanmax(dgs)
+    db_max = np.nanmax(dbs)
+    i_max = np.min([dr_max,dg_max,db_max])
+    print(f"Image max = {i_max}")
+    print(f"R max = {dr_max}")
+    print(f"G max = {dg_max}")
+    print(f"B max = {db_max}")
+
+    segmap = np.zeros_like(drs,dtype=int)
+    segmap[drs>0.001] = 1
+
+    idx_seg = np.where(segmap>0)
+    idx_seg_z = np.where(segmap==0)
+
+    scut = 100
+
+    drsmin_all = 2.0e-3
+
+    drsc = sigma_clip(drs[np.fabs(drs)>0],sigma=scut)
+    drsc = drsc.astype(np.float32)
+
+    drscmin = np.nanmin(drsc)
+    drscmax = np.nanmax(drsc)
+
+    drscmin = drsmin_all
+    drc = np.clip(drs,drscmin,drscmax)
+    drp = np.log10(drc)
+    drp = drp.astype(np.float32)
+
+    dgsc = sigma_clip(dgs[np.fabs(dgs)>0],sigma=scut)
+    dgsc = dgsc.astype(np.float32)
+
+    dgscmin = np.nanmin(dgsc)
+    dgscmax = np.nanmax(dgsc)
+
+    dgscmin = drsmin_all
+    dgc = np.clip(dgs,dgscmin,dgscmax)
+    dgp = np.log10(dgc)
+
+    dbsc = sigma_clip(dbs[np.fabs(dbs)>0],sigma=scut)
+    dbsc = dbsc.astype(np.float32)
+
+    dbscmin = np.nanmin(dbsc)
+    dbscmax = np.nanmax(dbsc)
+    
+    dbscmin = drsmin_all
+    dbc = np.clip(dbs,dbscmin,dbscmax)
+    dbp = np.log10(dbc)
+    dbp = dbp.astype(np.float32)
+
+
+    dbpmin = np.nanpercentile(dbp, perc_min[2])
+    dbpmax = np.nanpercentile(dbp, perc_max[2])
+    dgpmin = np.nanpercentile(dgp, perc_min[1])
+    dgpmax = np.nanpercentile(dgp, perc_max[1])
+    drpmin = np.nanpercentile(drp, perc_min[0])
+    drpmax = np.nanpercentile(drp, perc_max[0])
+
+    print(dbpmin,dbpmax)
+    print(dgpmin,dgpmax)
+    print(drpmin,drpmax)
+    drp = np.where(drp>drpmax, drpmax, drp)
+    dgp = np.where(dgp>dgpmax, dgpmax, dgp)
+    dbp = np.where(dbp>dbpmax, dbpmax, dbp)
+    drp = np.where(drp<drpmin, drpmin, drp)
+    dgp = np.where(dgp<dgpmin, dgpmin, dgp)
+    dbp = np.where(dbp<dbpmin, dbpmin, dbp)
+
+    r = (drp-drpmin)/(drpmax-drpmin)
+    g = (dgp-dgpmin)/(dgpmax-dgpmin)
+    b = (dbp-dbpmin)/(dbpmax-dbpmin)
+
+    r = r.astype(np.float32)
+    g = g.astype(np.float32)
+    b = b.astype(np.float32)
+
+    g*=0.85
+
+    #idxz = np.where((dr==0)&(dg==0)&(db==0))
+    idxz = np.where((dr==0)|(dg==0)|(db==0))
+    r[idxz] = 1
+    g[idxz] = 1
+    b[idxz] = 1
+
+    rgb = np.zeros((dr.shape[0],dr.shape[1],3),dtype=np.float32)
+
+    rgb[:,:,0] = r
+    rgb[:,:,1] = g
+    rgb[:,:,2] = b
+
+    return rgb
 
 
 if __name__ == "__main__":
